@@ -37,8 +37,8 @@ CI runs `composer validate --strict`, which fails when the two have drifted apar
 
 - **Tests.** The suite mocks HTTP behind `Dregs\Http\Transport`, so tests are fast and reach no
   network. New behavior needs a test; a bug fix needs one that fails without it.
-- **Types.** PHPStan runs over `src`, `tests`, and `examples`. Annotate array shapes: a caller
-  should never have to narrow a `mixed` that came out of this SDK.
+- **Types.** PHPStan runs at level `max` over `src`, `tests`, and `examples`. Annotate array
+  shapes: a caller should never have to narrow a `mixed` that came out of this SDK.
 - **No required runtime dependencies.** `new Dregs\Client($key)` has to work in a project with
   nothing else installed. PSR-18 support stays a `suggest`, and a test asserts that `require`
   holds nothing but `php` and extensions.

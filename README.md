@@ -284,7 +284,7 @@ implement `Dregs\Http\Transport` and pass that.
 ## Static analysis
 
 Every public class and method is annotated for PHPStan, including array shapes, so `mixed` never
-escapes into your code. Responses are `readonly` classes with typed properties; each one also keeps the
+escapes into your code. The SDK's own suite runs PHPStan at level `max`. Responses are `readonly` classes with typed properties; each one also keeps the
 body it was built from in `raw`, so a field Dregs adds after this release is reachable without waiting
 for an SDK upgrade.
 
