@@ -1,0 +1,19 @@
+# Composer
+/vendor/
+composer.phar
+
+# Tooling caches
+/.phpunit.cache/
+/.php-cs-fixer.cache
+/.phpstan.cache/
+.phpunit.result.cache
+
+# Build output
+/build/
+/dist/
+
+# Local environment
+.env
+
+# macOS
+.DS_Store
