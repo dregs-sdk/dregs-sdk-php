@@ -35,7 +35,8 @@ final class Env
     }
 
     /**
-     * @param array<string, mixed> $source
+     * @param array<array-key, mixed> $source A superglobal, which PHP types loosely enough
+     *                                        that the key type cannot be assumed.
      */
     private static function fromSuperglobal(array $source, string $name): ?string
     {
