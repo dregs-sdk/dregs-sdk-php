@@ -29,14 +29,37 @@ final readonly class RecordedRequest
      */
     public function json(): array
     {
-        Assert::assertNotNull($this->body, 'The request carried no body.');
+        if ($this->body === null) {
+            Assert::fail('The request carried no body.');
+        }
 
-        $decoded = json_decode((string) $this->body, true);
+        $decoded = json_decode($this->body, true);
 
-        Assert::assertIsArray($decoded, 'The request body was not a JSON object.');
+        if (!is_array($decoded)) {
+            Assert::fail('The request body was not a JSON object.');
+        }
 
-        /** @var array<string, mixed> $decoded */
-        return $decoded;
+        $fields = [];
+
+        foreach ($decoded as $name => $value) {
+            $fields[(string) $name] = $value;
+        }
+
+        return $fields;
+    }
+
+    /**
+     * One field of the JSON body, failing the test when it is absent or not a string.
+     */
+    public function stringField(string $key): string
+    {
+        $value = $this->json()[$key] ?? null;
+
+        if (!is_string($value)) {
+            Assert::fail("The request body field '{$key}' was not a string.");
+        }
+
+        return $value;
     }
 
     /**
@@ -54,7 +77,7 @@ final readonly class RecordedRequest
     }
 
     /**
-     * The request's path and query, with the base URL stripped off.
+     * The request's path, with the base URL stripped off.
      */
     public function pathAfter(string $baseUrl): string
     {

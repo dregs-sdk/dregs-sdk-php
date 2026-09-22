@@ -26,7 +26,9 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          # The floor the package supports, so PHP-CS-Fixer does not warn about analysing
+          # code on a newer runtime than it will run on.
+          php-version: '8.2'
           extensions: curl, json, mbstring
           coverage: none
           tools: composer:v2
