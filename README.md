@@ -74,8 +74,8 @@ $result->isAccepted();  // true when Dregs recorded the event
 $result->id;            // the event's id
 ```
 
-`isAccepted()` is `false` for the handful of rejections Dregs answers quietly rather than naming the
-check that failed. Failures that are yours to act on throw instead — see [Errors](#errors).
+`isAccepted()` is `false` in the uncommon case where Dregs accepts the request without recording an
+event. Failures that are yours to act on throw instead — see [Errors](#errors).
 
 ## Reading scores
 

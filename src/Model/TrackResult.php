@@ -32,11 +32,10 @@ final readonly class TrackResult
     /**
      * Whether Dregs recorded the event.
      *
-     * This is false for the handful of rejections Dregs answers quietly rather than naming
-     * the check that failed: an event from an origin the credential does not allow, or one
-     * carrying a malformed device signature or an unusable event id. Ingestion failures that
-     * are yours to act on — a bad request, an unknown key, an exhausted quota, a rate limit —
-     * throw instead of landing here.
+     * This is false in the uncommon case where Dregs accepts the request without recording
+     * an event. A server-side integration holding a valid secret key should not normally see
+     * it. Ingestion failures that are yours to act on — a bad request, an unknown key, an
+     * exhausted quota, a rate limit — throw instead of landing here.
      *
      * A false here is worth a log line. It means events are being dropped silently, and the
      * cause is nearly always a configuration mistake rather than a passing fault.

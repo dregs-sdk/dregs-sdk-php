@@ -252,8 +252,8 @@ class Client
      * @throws ConnectionException      Dregs could not be reached.
      * @throws InvalidArgumentException An argument was empty, reserved, or too long.
      *
-     * @return TrackResult The outcome. Check `isAccepted()` to tell a recorded event from one
-     *                     of the rejections Dregs answers quietly.
+     * @return TrackResult The outcome. Check `isAccepted()` to confirm Dregs recorded the
+     *                     event.
      */
     public function track(
         string $eventType,

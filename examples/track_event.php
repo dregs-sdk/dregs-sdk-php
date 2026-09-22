@@ -46,6 +46,6 @@ try {
 if ($result->isAccepted()) {
     echo "Recorded event {$result->id}.", PHP_EOL;
 } else {
-    // Dregs answers a few rejections quietly rather than naming the check that failed.
+    // Uncommon, and worth a log line: accepted without an event being recorded.
     echo "The event was not recorded (status {$result->status}).", PHP_EOL;
 }
