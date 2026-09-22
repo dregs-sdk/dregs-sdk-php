@@ -6,7 +6,7 @@ namespace Dregs\Tests;
 
 use Dregs\Client;
 use Dregs\Http\CurlTransport;
-use Dregs\Http\Psr18Transport;
+use Dregs\Tests\Support\CombinedPsr18Client;
 use Dregs\Tests\Support\FakeTransport;
 use InvalidArgumentException;
 use Nyholm\Psr7\Factory\Psr17Factory;
@@ -149,32 +149,28 @@ final class ClientConstructionTest extends TestCase
         new Client(self::SECRET_KEY, self::BASE_URL, httpClient: $psr18);
     }
 
-    public function testThePsr18TransportTakesTheClientAsItsOwnFactoryWhenItIsOne(): void
+    public function testAPsr18ClientThatIsItsOwnFactoryNeedsNothingElse(): void
     {
-        // Nyholm's factory is a request factory and a stream factory at once, as Symfony's
-        // PSR-18 client is; a client like that needs nothing else passed alongside it.
-        $factory = new class () extends Psr17Factory implements ClientInterface {
-            public function sendRequest(RequestInterface $request): ResponseInterface
-            {
-                return $this->createResponse(200)->withBody($this->createStream('{"id": "ada"}'));
-            }
-        };
+        // Symfony's PSR-18 client is a request factory and a stream factory at once; a client
+        // like that should not have to be handed factories it already is.
+        $psr18 = new CombinedPsr18Client('{"id": "ada"}');
 
-        $client = new Client(self::SECRET_KEY, self::BASE_URL, httpClient: $factory);
+        $client = new Client(self::SECRET_KEY, self::BASE_URL, httpClient: $psr18);
 
         self::assertSame('ada', $client->identities->get('ada')->id);
+        self::assertCount(1, $psr18->sent);
     }
 
     public function testTheDefaultTransportNeedsNothingInstalled(): void
     {
-        // The point of the cURL transport: a client built with no arguments beyond the key
-        // is usable, with no PSR-18 implementation anywhere in the project.
+        // The point of the cURL transport: a client built with nothing but the key is usable,
+        // with no PSR-18 implementation anywhere in the project.
         self::assertInstanceOf(CurlTransport::class, new CurlTransport());
-        self::assertTrue(class_exists(Psr18Transport::class));
-
-        new Client(self::SECRET_KEY);
-
-        self::expectNotToPerformAssertions();
+        self::assertSame(
+            Client::DEFAULT_BASE_URL,
+            (new Client(self::SECRET_KEY))->baseUrl,
+            'A client built with only a key should be ready to use.'
+        );
     }
 
     private function psr18Returning(ResponseInterface $response): ClientInterface

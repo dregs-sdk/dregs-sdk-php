@@ -40,6 +40,10 @@ final class CurlTransport implements Transport
      */
     public function send(string $method, string $url, array $headers, ?string $body): Response
     {
+        if ($method === '' || $url === '') {
+            throw new ConnectionException('A request needs both a method and a URL.');
+        }
+
         $handle = curl_init();
 
         if (!$handle instanceof CurlHandle) {

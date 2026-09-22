@@ -58,7 +58,7 @@ $observations = $analysis->observations();
 usort($observations, static fn (Observation $a, Observation $b): int => ($a->value ?? 1.0) <=> ($b->value ?? 1.0));
 
 foreach ($observations as $observation) {
-    echo '  [', $observation->category?->value ?? 'UNKNOWN', '] ', $observation->label, PHP_EOL;
+    echo '  [', $observation->category->value ?? 'UNKNOWN', '] ', $observation->label, PHP_EOL;
     echo '      ', $observation->explanation, PHP_EOL;
     echo '      value ', $number($observation->value), ', confidence ', $number($observation->confidence), PHP_EOL;
 }
