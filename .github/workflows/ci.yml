@@ -1,0 +1,110 @@
+# Lint, analyse, test, and package. Composer owns the dependency set through a committed
+# lock file, so these are the same commands a contributor runs locally and they resolve to
+# the same versions.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, json, mbstring
+          coverage: none
+          tools: composer:v2
+
+      # --strict fails on warnings as well as errors, and rejects a composer.lock that has
+      # drifted from composer.json rather than quietly resolving something else.
+      - name: Validate composer.json and composer.lock
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress
+
+      - name: PHP-CS-Fixer
+        run: vendor/bin/php-cs-fixer check --diff --show-progress=none
+
+      - name: PHPStan
+        run: vendor/bin/phpstan analyse --no-progress
+
+  test:
+    name: Test on PHP ${{ matrix.php-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['8.2', '8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: curl, json, mbstring
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress
+
+      - name: Test
+        run: vendor/bin/phpunit
+
+  package:
+    name: Build the package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, json, mbstring
+          coverage: none
+          tools: composer:v2
+
+      - name: Build the archive
+        run: composer archive --format=tar --file=dregs-sdk --dir=dist
+
+      # Installing the archive on its own catches a package that works from a checkout but
+      # would arrive at a consumer missing a file or with autoloading that does not resolve,
+      # which is otherwise only discovered after it is published.
+      - name: Install the archive into a clean directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          tar -xf dist/dregs-sdk.tar -C "$RUNNER_TEMP/package"
+          cd "$RUNNER_TEMP/package"
+          composer install --no-dev --no-interaction --no-progress
+          php -r '
+            require "vendor/autoload.php";
+            $client = new Dregs\Client("sk_0123456789abcdefghijklmnopqrst");
+            assert($client->baseUrl === Dregs\Client::DEFAULT_BASE_URL);
+            echo "dregs/dregs-sdk ", Dregs\Client::VERSION, " loads cleanly.", PHP_EOL;
+          '
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: dist/
+          retention-days: 7
