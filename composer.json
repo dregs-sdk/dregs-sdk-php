@@ -1,0 +1,84 @@
+{
+    "name": "dregs/dregs-sdk",
+    "description": "PHP SDK for Dregs, the fraud and abuse scoring service.",
+    "type": "library",
+    "keywords": [
+        "dregs",
+        "fraud",
+        "abuse",
+        "fraud-detection",
+        "bot-detection",
+        "risk-scoring"
+    ],
+    "homepage": "https://dregs.com",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Dregs",
+            "email": "support@dregs.com",
+            "homepage": "https://dregs.com"
+        }
+    ],
+    "support": {
+        "docs": "https://dregs.com/manual/api/",
+        "issues": "https://github.com/dregs-sdk/dregs-sdk-php/issues",
+        "source": "https://github.com/dregs-sdk/dregs-sdk-php",
+        "email": "support@dregs.com"
+    },
+    "require": {
+        "php": ">=8.2",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.68",
+        "nyholm/psr7": "^1.8",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.1"
+    },
+    "suggest": {
+        "psr/http-client": "To send requests through your application's own PSR-18 client, via Dregs\\Http\\Psr18Transport.",
+        "psr/http-factory": "PSR-17 request and stream factories, which Dregs\\Http\\Psr18Transport needs alongside a PSR-18 client."
+    },
+    "autoload": {
+        "psr-4": {
+            "Dregs\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Dregs\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "platform": {
+            "php": "8.2.0"
+        }
+    },
+    "archive": {
+        "exclude": [
+            "/.github",
+            "/.php-cs-fixer.dist.php",
+            "/dist",
+            "/examples",
+            "/phpstan.neon.dist",
+            "/phpunit.xml.dist",
+            "/tests"
+        ]
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse",
+        "lint": "php-cs-fixer check --diff",
+        "fix": "php-cs-fixer fix"
+    },
+    "scripts-descriptions": {
+        "test": "Run the PHPUnit suite.",
+        "stan": "Run PHPStan static analysis.",
+        "lint": "Check formatting without changing anything.",
+        "fix": "Apply PHP-CS-Fixer formatting."
+    }
+}
