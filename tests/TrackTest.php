@@ -10,6 +10,7 @@ use Dregs\Client;
 use Dregs\Tests\Support\FakeTransport;
 use Dregs\Tests\Support\Responses;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The body, headers, and result of `track()`.
@@ -23,6 +24,24 @@ final class TrackTest extends TestCase
         parent::setUp();
 
         $this->transport = FakeTransport::alwaysJson(['status' => 'success', 'id' => 'evt_1']);
+    }
+
+    /**
+     * @return list<array{array<mixed>, string}>
+     */
+    public static function malformedGroups(): array
+    {
+        return [
+            [['type' => 'team', 'id' => 'team_42'], 'list of groups'],
+            [['team_42'], 'must be an array'],
+            [[['type' => 'team']], 'needs an id'],
+            [[['type' => 'team', 'id' => '']], 'needs an id'],
+            [[['type' => 'team', 'id' => 4.2]], 'needs an id'],
+            [[['type' => 7, 'id' => 'team_42']], 'must be a string'],
+            [[['type' => 'team', 'id' => 'a'], ['type' => 'Team', 'id' => 'b']], 'one group of each type'],
+            [[['id' => 'a'], ['type' => 'organization', 'id' => 'b']], 'one group of each type'],
+            [[['type' => 'team', 'id' => 'a', 'data' => 'Payments']], 'data must be an array'],
+        ];
     }
 
     public function testSendsTheDocumentedBody(): void
@@ -188,6 +207,75 @@ final class TrackTest extends TestCase
         $this->client()->track('user.signup', 'user_12345', eventId: $eventId);
 
         self::assertSame($eventId, $this->transport->lastRequest()->stringField('id'));
+    }
+
+    public function testSendsTheGroups(): void
+    {
+        $this->client()->track(
+            'user.login',
+            identity: 'user_12345',
+            groups: [
+                ['type' => 'organization', 'id' => 'org_678', 'data' => ['name' => 'Acme Inc']],
+                ['type' => 'team', 'id' => 42],
+            ],
+        );
+
+        $body = $this->transport->lastRequest()->json();
+
+        self::assertSame(
+            [
+                ['type' => 'organization', 'id' => 'org_678', 'data' => ['name' => 'Acme Inc']],
+                ['type' => 'team', 'id' => '42', 'data' => []],
+            ],
+            $body['groups'],
+        );
+    }
+
+    public function testAGroupWithoutATypeIsAnOrganization(): void
+    {
+        $this->client()->track('user.login', 'user_12345', groups: [['id' => 'org_678']]);
+
+        $body = $this->transport->lastRequest()->json();
+
+        self::assertSame([['type' => 'organization', 'id' => 'org_678', 'data' => []]], $body['groups']);
+    }
+
+    public function testAGroupWithoutDataIsSentWithAnObject(): void
+    {
+        $this->client()->track('user.login', 'user_12345', groups: [['type' => 'team', 'id' => 'team_42']]);
+
+        $body = (string) $this->transport->lastRequest()->body;
+
+        self::assertStringContainsString('"groups":[{"type":"team","id":"team_42","data":{}}]', $body);
+    }
+
+    public function testOmitsTheGroupsWhenThereAreNone(): void
+    {
+        $client = $this->client();
+
+        $client->track('user.login', 'user_12345');
+        $client->track('user.login', 'user_12345', groups: []);
+
+        self::assertArrayNotHasKey('groups', $this->transport->request(0)->json());
+        self::assertArrayNotHasKey('groups', $this->transport->request(1)->json());
+    }
+
+    /**
+     * @param array<mixed> $groups
+     */
+    #[DataProvider('malformedGroups')]
+    public function testMalformedGroupsAreRefusedBeforeAnyRequest(array $groups, string $message): void
+    {
+        try {
+            // @phpstan-ignore argument.type (malformed on purpose: the signature rules these out)
+            $this->client()->track('user.login', 'user_12345', groups: $groups);
+
+            self::fail('Malformed groups should have been refused.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString($message, $exception->getMessage());
+        }
+
+        self::assertSame(0, $this->transport->callCount());
     }
 
     public function testDataThatCannotBeEncodedIsRefusedWithAdvice(): void

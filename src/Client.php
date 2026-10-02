@@ -97,6 +97,9 @@ class Client
     /** The ceiling on the exponential part of the backoff, before jitter. */
     private const MAX_JITTER_WINDOW_SECONDS = 8.0;
 
+    /** The type of a group that does not name one. */
+    private const DEFAULT_GROUP_TYPE = 'organization';
+
     /** An older API build reported the ingestion rate limit in the body of a 200. */
     private const STATUS_RATE_LIMITED = 'rate_limited';
 
@@ -208,41 +211,60 @@ class Client
      * );
      * ```
      *
-     * @param string                    $eventType    Your name for the event, such as
-     *                                                "user.signup". Map it to one of Dregs's
-     *                                                canonical types under **Settings ->
-     *                                                Mappings** so the analyzers know what it
-     *                                                means.
-     * @param string                    $identity     Your own id for the user. This is the
-     *                                                same id you pass to `dregs.identify()`
-     *                                                in the browser tracker, and the one you
-     *                                                look scores up by. It is required: a
-     *                                                server-side event carries no device
-     *                                                signature, so the identity is the only
-     *                                                thing tying it to a user.
-     * @param array<string, mixed>|null $data         Attributes of the event itself.
-     * @param array<string, mixed>|null $identityData Attributes of the *user*, such as email,
-     *                                                name, or username. Dregs merges these
-     *                                                into the identity, and the analyzers
-     *                                                lean on them heavily, so send them
-     *                                                whenever you have them. Flat keys work
-     *                                                best; name them as your application
-     *                                                already does and map them under
-     *                                                **Settings -> Mappings**.
-     * @param string|null               $eventId      Your own id for the event, which makes
-     *                                                ingestion idempotent: reposting the same
-     *                                                id returns the original event instead of
-     *                                                recording a second one. Pass the id your
-     *                                                application already has — the row id of
-     *                                                the record that triggered the event,
-     *                                                say. When you omit it the SDK generates
-     *                                                one, which is what makes its own retries
-     *                                                safe. At most 64 characters, and it
-     *                                                cannot start with "dregs-".
-     * @param DateTimeInterface|null    $timestamp    When the event happened, if not now. Any
-     *                                                timezone; it is sent as UTC.
-     * @param string|null               $source       A label for where the event came from.
-     *                                                Defaults to "php-sdk".
+     * @param string                          $eventType    Your name for the event, such as
+     *                                                      "user.signup". Map it to one of
+     *                                                      Dregs's canonical types under
+     *                                                      **Settings -> Mappings** so the
+     *                                                      analyzers know what it means.
+     * @param string                          $identity     Your own id for the user. This is
+     *                                                      the same id you pass to
+     *                                                      `dregs.identify()` in the browser
+     *                                                      tracker, and the one you look
+     *                                                      scores up by. It is required: a
+     *                                                      server-side event carries no
+     *                                                      device signature, so the identity
+     *                                                      is the only thing tying it to a
+     *                                                      user.
+     * @param array<string, mixed>|null       $data         Attributes of the event itself.
+     * @param array<string, mixed>|null       $identityData Attributes of the *user*, such as
+     *                                                      email, name, or username. Dregs
+     *                                                      merges these into the identity,
+     *                                                      and the analyzers lean on them
+     *                                                      heavily, so send them whenever you
+     *                                                      have them. Flat keys work best;
+     *                                                      name them as your application
+     *                                                      already does and map them under
+     *                                                      **Settings -> Mappings**.
+     * @param string|null                     $eventId      Your own id for the event, which
+     *                                                      makes ingestion idempotent:
+     *                                                      reposting the same id returns the
+     *                                                      original event instead of
+     *                                                      recording a second one. Pass the
+     *                                                      id your application already has —
+     *                                                      the row id of the record that
+     *                                                      triggered the event, say. When you
+     *                                                      omit it the SDK generates one,
+     *                                                      which is what makes its own
+     *                                                      retries safe. At most 64
+     *                                                      characters, and it cannot start
+     *                                                      with "dregs-".
+     * @param DateTimeInterface|null          $timestamp    When the event happened, if not
+     *                                                      now. Any timezone; it is sent as
+     *                                                      UTC.
+     * @param string|null                     $source       A label for where the event came
+     *                                                      from. Defaults to "php-sdk".
+     * @param list<array<string, mixed>>|null $groups       The groups the user is acting in,
+     *                                                      such as their organization or
+     *                                                      team, if your application has
+     *                                                      them. Each is an array with an
+     *                                                      `id` (your own), an optional
+     *                                                      `type` (your own name for the kind
+     *                                                      of group, defaulting to
+     *                                                      "organization"), and optional
+     *                                                      `data` that Dregs merges into the
+     *                                                      group. Dregs makes the identity a
+     *                                                      member of each. At most one group
+     *                                                      of each type.
      *
      * @throws QuotaExceededException   The account is over its monthly event limit.
      * @throws RateLimitException       The credential is ingesting too fast.
@@ -250,7 +272,7 @@ class Client
      * @throws BadRequestException      The event was malformed.
      * @throws TimeoutException         Every attempt timed out.
      * @throws ConnectionException      Dregs could not be reached.
-     * @throws InvalidArgumentException An argument was empty, reserved, or too long.
+     * @throws InvalidArgumentException An argument was empty, reserved, too long, or malformed.
      *
      * @return TrackResult The outcome. Check `isAccepted()` to confirm Dregs recorded the
      *                     event.
@@ -263,6 +285,7 @@ class Client
         ?string $eventId = null,
         ?DateTimeInterface $timestamp = null,
         ?string $source = null,
+        ?array $groups = null,
     ): TrackResult {
         $body = $this->trackBody(
             $eventType,
@@ -272,6 +295,7 @@ class Client
             $eventId,
             $timestamp,
             $source,
+            $groups,
         );
 
         return TrackResult::fromApi(Payload::asMap($this->request('POST', '/events', $body)));
@@ -390,8 +414,9 @@ class Client
      * so reposting the same event is a no-op on the Dregs side; otherwise one is generated,
      * which is what makes this client's own retries safe to perform.
      *
-     * @param array<string, mixed>|null $data
-     * @param array<string, mixed>|null $identityData
+     * @param array<string, mixed>|null       $data
+     * @param array<string, mixed>|null       $identityData
+     * @param list<array<string, mixed>>|null $groups
      *
      * @throws InvalidArgumentException
      *
@@ -405,6 +430,7 @@ class Client
         ?string $eventId,
         ?DateTimeInterface $timestamp,
         ?string $source,
+        ?array $groups,
     ): array {
         if ($eventType === '') {
             throw new InvalidArgumentException('eventType is required.');
@@ -417,6 +443,7 @@ class Client
             );
         }
 
+        $resolvedGroups = self::groupsBody($groups);
         $resolvedId = $eventId ?? self::generateEventId();
 
         if (str_starts_with($resolvedId, self::RESERVED_EVENT_ID_PREFIX)) {
@@ -443,11 +470,94 @@ class Client
             'source' => $source ?? self::SOURCE,
         ];
 
+        if ($resolvedGroups !== []) {
+            $body['groups'] = $resolvedGroups;
+        }
+
         if ($timestamp !== null) {
             $body['timestamp'] = Dates::format($timestamp);
         }
 
         return $body;
+    }
+
+    /**
+     * Builds the `groups` list of a track body, refusing malformed entries before any request.
+     *
+     * Each group needs an `id`. Its `type` defaults to "organization", and Dregs normalizes it
+     * to lower_snake_case, so only one group of each type may go with an event.
+     *
+     * @param array<mixed>|null $groups
+     *
+     * @throws InvalidArgumentException
+     *
+     * @return list<array{type: string, id: string, data: object}>
+     */
+    private static function groupsBody(?array $groups): array
+    {
+        if ($groups === null) {
+            return [];
+        }
+
+        if (!array_is_list($groups)) {
+            throw new InvalidArgumentException(
+                "groups is a list of groups, such as [['type' => 'team', 'id' => 'team_42']]."
+            );
+        }
+
+        $resolved = [];
+        $seen = [];
+
+        foreach ($groups as $group) {
+            if (!is_array($group)) {
+                throw new InvalidArgumentException(
+                    'Each group must be an array with an id, and optionally a type and data.'
+                );
+            }
+
+            $groupId = $group['id'] ?? null;
+
+            if ((!is_string($groupId) && !is_int($groupId)) || $groupId === '') {
+                throw new InvalidArgumentException('Each group needs an id, as a string or an integer.');
+            }
+
+            $groupType = $group['type'] ?? null;
+
+            if ($groupType === null || $groupType === '') {
+                $groupType = self::DEFAULT_GROUP_TYPE;
+            }
+
+            if (!is_string($groupType)) {
+                throw new InvalidArgumentException(
+                    "A group's type must be a string, such as 'organization' or 'team'."
+                );
+            }
+
+            $typeKey = strtolower($groupType);
+
+            if (isset($seen[$typeKey])) {
+                throw new InvalidArgumentException(
+                    "Only one group of each type can go with an event; '{$groupType}' appears twice."
+                );
+            }
+
+            $data = $group['data'] ?? null;
+
+            if ($data !== null && !is_array($data)) {
+                throw new InvalidArgumentException(
+                    "A group's data must be an array, such as ['name' => 'Payments']."
+                );
+            }
+
+            $seen[$typeKey] = true;
+            $resolved[] = [
+                'type' => $groupType,
+                'id' => (string) $groupId,
+                'data' => (object) ($data ?? []),
+            ];
+        }
+
+        return $resolved;
     }
 
     /**
