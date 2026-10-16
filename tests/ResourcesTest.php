@@ -405,6 +405,7 @@ final class ResourcesTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessageMatches('/keyed by name/');
 
+        // @phpstan-ignore argument.type (malformed on purpose: the signature rules this out)
         $this->client(new FakeTransport())->groups->create('org_678', attributes: ['Acme Inc']);
     }
 
@@ -516,7 +517,7 @@ final class ResourcesTest extends TestCase
         self::assertSame('php-sdk', $event->source);
         self::assertSame('SIGNUP', $event->canonicalType);
         self::assertSame('user_12345', $event->identity?->id);
-        self::assertSame('Ada', $event->identity?->label);
+        self::assertSame('Ada', $event->identity->label);
         self::assertSame('team', Items::first($event->groups)->type);
         self::assertSame('team_42', Items::first($event->groups)->id);
         self::assertSame('pro', $event->data['plan'] ?? null);
@@ -639,7 +640,7 @@ final class ResourcesTest extends TestCase
         self::assertFalse($escalation->isOpen());
         self::assertSame('user_12345', $escalation->identity?->id);
         self::assertSame('3', $escalation->rule?->id);
-        self::assertSame('Low humanity', $escalation->rule?->label);
+        self::assertSame('Low humanity', $escalation->rule->label);
         self::assertSame(12, $escalation->scores['humanity'] ?? null);
     }
 
