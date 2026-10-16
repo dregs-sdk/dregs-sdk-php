@@ -3,8 +3,8 @@
 Thanks for helping improve the Dregs PHP SDK.
 
 This SDK is a **port of the reference SDK**, [dregs-sdk-python][python]: the TypeScript, Java,
-Ruby, and PHP clients all follow that one's shape, so a change to the public surface here is a
-change that has to land in all five. Surface changes are worth discussing in an issue before you
+Ruby, PHP, Rust, and Elixir clients all follow that one's shape, so a change to the public surface here is a
+change that has to land in all seven. Surface changes are worth discussing in an issue before you
 write the code.
 
 [python]: https://github.com/dregs-sdk/dregs-sdk-python
