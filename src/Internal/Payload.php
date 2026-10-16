@@ -32,6 +32,23 @@ final class Payload
     }
 
     /**
+     * Reads an identifier that may arrive as a string or as a number, such as a reference's
+     * `id`, which is a string for an identity and a number for an escalation rule.
+     *
+     * @param array<string, mixed> $payload
+     */
+    public static function id(array $payload, string $key): ?string
+    {
+        $value = $payload[$key] ?? null;
+
+        if (is_int($value)) {
+            return (string) $value;
+        }
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
      * Reads an integer, accepting the float or numeric string a JSON encoder might have sent.
      *
      * @param array<string, mixed> $payload

@@ -98,6 +98,46 @@ final class ErrorTest extends TestCase
         }
     }
 
+    public function testAnErrorWithNoBodyFallsBackToTheReasonPhrase(): void
+    {
+        $client = $this->client(FakeTransport::always(Responses::empty(404)));
+
+        try {
+            $client->identities->get('user_12345');
+
+            self::fail('A 404 should have thrown.');
+        } catch (NotFoundException $exception) {
+            self::assertSame('Not Found', $exception->description);
+            self::assertSame('HTTP 404: Not Found', $exception->getMessage());
+        }
+    }
+
+    public function testAnErrorBodyWithNoMessageFallsBackToTheReasonPhrase(): void
+    {
+        $client = $this->client(FakeTransport::alwaysJson(['timestamp' => '2026-09-21T14:22:09Z'], 503));
+
+        try {
+            $client->identities->get('user_12345');
+
+            self::fail('A 503 should have thrown.');
+        } catch (ServerException $exception) {
+            self::assertSame('Service Unavailable', $exception->description);
+        }
+    }
+
+    public function testAnUnknownStatusWithNoMessageStillSaysSomething(): void
+    {
+        $client = $this->client(FakeTransport::always(Responses::empty(499)));
+
+        try {
+            $client->identities->get('user_12345');
+
+            self::fail('A 499 should have thrown.');
+        } catch (ApiException $exception) {
+            self::assertSame('Request failed', $exception->description);
+        }
+    }
+
     public function testTheParsedBodyIsCarriedThrough(): void
     {
         $client = $this->client(FakeTransport::always(Responses::error(400, 'Bad')));
