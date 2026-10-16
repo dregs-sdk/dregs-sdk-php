@@ -30,6 +30,7 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Random\RandomException;
+use stdClass;
 
 /**
  * A Dregs client.
@@ -46,6 +47,9 @@ use Random\RandomException;
  * $scores = $client->identities->scores('user_12345');
  * ```
  *
+ * Beyond `track()`, everything hangs off five namespaces: `identities`, `groups`, `events`,
+ * `devices`, and `escalations`.
+ *
  * The client is stateless beyond its configuration, so build one at startup, register it in
  * your container, and reuse it. Nothing here holds a connection open between calls.
  *
@@ -57,7 +61,7 @@ use Random\RandomException;
 class Client
 {
     /** This SDK's version, as it appears in the `User-Agent`. */
-    public const VERSION = '0.1.0';
+    public const VERSION = '1.0.0';
 
     /** Where requests go when neither an argument nor the environment says otherwise. */
     public const DEFAULT_BASE_URL = 'https://dregs.com/api';
@@ -97,14 +101,68 @@ class Client
     /** The ceiling on the exponential part of the backoff, before jitter. */
     private const MAX_JITTER_WINDOW_SECONDS = 8.0;
 
+    /** The type of a group that does not name one. */
+    private const DEFAULT_GROUP_TYPE = Groups::DEFAULT_TYPE;
+
     /** An older API build reported the ingestion rate limit in the body of a 200. */
     private const STATUS_RATE_LIMITED = 'rate_limited';
 
     /** An older API build reported the monthly event limit in the body of a 200. */
     private const STATUS_QUOTA_EXCEEDED = 'quota_exceeded';
 
-    /** Read identities, their scores, and their analysis. */
+    /**
+     * Reason phrases for the statuses an error is likely to carry, for an error response
+     * whose body says nothing of its own. A transport hands back only the status code, so
+     * the phrase is looked up here rather than read off the wire.
+     *
+     * @var array<int, string>
+     */
+    private const REASON_PHRASES = [
+        400 => 'Bad Request',
+        401 => 'Unauthorized',
+        402 => 'Payment Required',
+        403 => 'Forbidden',
+        404 => 'Not Found',
+        405 => 'Method Not Allowed',
+        406 => 'Not Acceptable',
+        408 => 'Request Timeout',
+        409 => 'Conflict',
+        410 => 'Gone',
+        411 => 'Length Required',
+        412 => 'Precondition Failed',
+        413 => 'Content Too Large',
+        414 => 'URI Too Long',
+        415 => 'Unsupported Media Type',
+        418 => "I'm a teapot",
+        422 => 'Unprocessable Content',
+        423 => 'Locked',
+        425 => 'Too Early',
+        428 => 'Precondition Required',
+        429 => 'Too Many Requests',
+        431 => 'Request Header Fields Too Large',
+        451 => 'Unavailable For Legal Reasons',
+        500 => 'Internal Server Error',
+        501 => 'Not Implemented',
+        502 => 'Bad Gateway',
+        503 => 'Service Unavailable',
+        504 => 'Gateway Timeout',
+        505 => 'HTTP Version Not Supported',
+    ];
+
+    /** Read identities, their scores, and their analysis, and update them. */
     public readonly Identities $identities;
+
+    /** Read and manage groups and their members. */
+    public readonly Groups $groups;
+
+    /** Read the events Dregs has recorded. */
+    public readonly Events $events;
+
+    /** Read devices, and disregard them. */
+    public readonly Devices $devices;
+
+    /** Read and work escalations. */
+    public readonly Escalations $escalations;
 
     /** The API root every request is built against, with any trailing slash removed. */
     public readonly string $baseUrl;
@@ -194,6 +252,10 @@ class Client
         }
 
         $this->identities = new Identities($this);
+        $this->groups = new Groups($this);
+        $this->events = new Events($this);
+        $this->devices = new Devices($this);
+        $this->escalations = new Escalations($this);
     }
 
     /**
@@ -208,41 +270,60 @@ class Client
      * );
      * ```
      *
-     * @param string                    $eventType    Your name for the event, such as
-     *                                                "user.signup". Map it to one of Dregs's
-     *                                                canonical types under **Settings ->
-     *                                                Mappings** so the analyzers know what it
-     *                                                means.
-     * @param string                    $identity     Your own id for the user. This is the
-     *                                                same id you pass to `dregs.identify()`
-     *                                                in the browser tracker, and the one you
-     *                                                look scores up by. It is required: a
-     *                                                server-side event carries no device
-     *                                                signature, so the identity is the only
-     *                                                thing tying it to a user.
-     * @param array<string, mixed>|null $data         Attributes of the event itself.
-     * @param array<string, mixed>|null $identityData Attributes of the *user*, such as email,
-     *                                                name, or username. Dregs merges these
-     *                                                into the identity, and the analyzers
-     *                                                lean on them heavily, so send them
-     *                                                whenever you have them. Flat keys work
-     *                                                best; name them as your application
-     *                                                already does and map them under
-     *                                                **Settings -> Mappings**.
-     * @param string|null               $eventId      Your own id for the event, which makes
-     *                                                ingestion idempotent: reposting the same
-     *                                                id returns the original event instead of
-     *                                                recording a second one. Pass the id your
-     *                                                application already has — the row id of
-     *                                                the record that triggered the event,
-     *                                                say. When you omit it the SDK generates
-     *                                                one, which is what makes its own retries
-     *                                                safe. At most 64 characters, and it
-     *                                                cannot start with "dregs-".
-     * @param DateTimeInterface|null    $timestamp    When the event happened, if not now. Any
-     *                                                timezone; it is sent as UTC.
-     * @param string|null               $source       A label for where the event came from.
-     *                                                Defaults to "php-sdk".
+     * @param string                          $eventType    Your name for the event, such as
+     *                                                      "user.signup". Map it to one of
+     *                                                      Dregs's canonical types under
+     *                                                      **Settings -> Mappings** so the
+     *                                                      analyzers know what it means.
+     * @param string                          $identity     Your own id for the user. This is
+     *                                                      the same id you pass to
+     *                                                      `dregs.identify()` in the browser
+     *                                                      tracker, and the one you look
+     *                                                      scores up by. It is required: a
+     *                                                      server-side event carries no
+     *                                                      device signature, so the identity
+     *                                                      is the only thing tying it to a
+     *                                                      user.
+     * @param array<string, mixed>|null       $data         Attributes of the event itself.
+     * @param array<string, mixed>|null       $identityData Attributes of the *user*, such as
+     *                                                      email, name, or username. Dregs
+     *                                                      merges these into the identity,
+     *                                                      and the analyzers lean on them
+     *                                                      heavily, so send them whenever you
+     *                                                      have them. Flat keys work best;
+     *                                                      name them as your application
+     *                                                      already does and map them under
+     *                                                      **Settings -> Mappings**.
+     * @param string|null                     $eventId      Your own id for the event, which
+     *                                                      makes ingestion idempotent:
+     *                                                      reposting the same id returns the
+     *                                                      original event instead of
+     *                                                      recording a second one. Pass the
+     *                                                      id your application already has —
+     *                                                      the row id of the record that
+     *                                                      triggered the event, say. When you
+     *                                                      omit it the SDK generates one,
+     *                                                      which is what makes its own
+     *                                                      retries safe. At most 64
+     *                                                      characters, and it cannot start
+     *                                                      with "dregs-".
+     * @param DateTimeInterface|null          $timestamp    When the event happened, if not
+     *                                                      now. Any timezone; it is sent as
+     *                                                      UTC.
+     * @param string|null                     $source       A label for where the event came
+     *                                                      from. Defaults to "php-sdk".
+     * @param list<array<string, mixed>>|null $groups       The groups the user is acting in,
+     *                                                      such as their organization or
+     *                                                      team, if your application has
+     *                                                      them. Each is an array with an
+     *                                                      `id` (your own), an optional
+     *                                                      `type` (your own name for the kind
+     *                                                      of group, defaulting to
+     *                                                      "organization"), and optional
+     *                                                      `data` that Dregs merges into the
+     *                                                      group. Dregs makes the identity a
+     *                                                      member of each. At most one group
+     *                                                      of each type.
      *
      * @throws QuotaExceededException   The account is over its monthly event limit.
      * @throws RateLimitException       The credential is ingesting too fast.
@@ -250,7 +331,7 @@ class Client
      * @throws BadRequestException      The event was malformed.
      * @throws TimeoutException         Every attempt timed out.
      * @throws ConnectionException      Dregs could not be reached.
-     * @throws InvalidArgumentException An argument was empty, reserved, or too long.
+     * @throws InvalidArgumentException An argument was empty, reserved, too long, or malformed.
      *
      * @return TrackResult The outcome. Check `isAccepted()` to confirm Dregs recorded the
      *                     event.
@@ -263,6 +344,7 @@ class Client
         ?string $eventId = null,
         ?DateTimeInterface $timestamp = null,
         ?string $source = null,
+        ?array $groups = null,
     ): TrackResult {
         $body = $this->trackBody(
             $eventType,
@@ -272,6 +354,7 @@ class Client
             $eventId,
             $timestamp,
             $source,
+            $groups,
         );
 
         return TrackResult::fromApi(Payload::asMap($this->request('POST', '/events', $body)));
@@ -280,10 +363,14 @@ class Client
     /**
      * Sends one request, retrying what is worth retrying, and returns the decoded body.
      *
-     * @param string                    $method The HTTP method.
-     * @param string                    $path   The path below the base URL, already escaped.
-     * @param array<string, mixed>|null $body   The request body, or null for a request
-     *                                          without one.
+     * @param string                         $method The HTTP method.
+     * @param string                         $path   The path below the base URL, already
+     *                                               escaped.
+     * @param array<string, mixed>|null      $body   The request body, or null for a request
+     *                                               without one. An empty array is sent as
+     *                                               `{}`.
+     * @param array<string, string|int|bool> $query  Query parameters. Booleans are sent as
+     *                                               "true" and "false".
      *
      * @throws ApiException        Dregs answered with an error status.
      * @throws TimeoutException    Every attempt timed out.
@@ -291,11 +378,11 @@ class Client
      *
      * @return mixed The decoded JSON body, or null when the response had none.
      *
-     * @internal Called by {@see Identities}. Not part of the SDK's public surface.
+     * @internal Called by the namespaces. Not part of the SDK's public surface.
      */
-    public function request(string $method, string $path, ?array $body = null): mixed
+    public function request(string $method, string $path, ?array $body = null, array $query = []): mixed
     {
-        $url = $this->baseUrl . '/' . ltrim($path, '/');
+        $url = $this->baseUrl . '/' . ltrim($path, '/') . self::queryString($query);
         $encoded = $body === null ? null : self::encode($body);
         $headers = $this->headers($encoded !== null);
         $attempt = 0;
@@ -390,8 +477,9 @@ class Client
      * so reposting the same event is a no-op on the Dregs side; otherwise one is generated,
      * which is what makes this client's own retries safe to perform.
      *
-     * @param array<string, mixed>|null $data
-     * @param array<string, mixed>|null $identityData
+     * @param array<string, mixed>|null       $data
+     * @param array<string, mixed>|null       $identityData
+     * @param list<array<string, mixed>>|null $groups
      *
      * @throws InvalidArgumentException
      *
@@ -405,6 +493,7 @@ class Client
         ?string $eventId,
         ?DateTimeInterface $timestamp,
         ?string $source,
+        ?array $groups,
     ): array {
         if ($eventType === '') {
             throw new InvalidArgumentException('eventType is required.');
@@ -417,6 +506,7 @@ class Client
             );
         }
 
+        $resolvedGroups = self::groupsBody($groups);
         $resolvedId = $eventId ?? self::generateEventId();
 
         if (str_starts_with($resolvedId, self::RESERVED_EVENT_ID_PREFIX)) {
@@ -443,11 +533,94 @@ class Client
             'source' => $source ?? self::SOURCE,
         ];
 
+        if ($resolvedGroups !== []) {
+            $body['groups'] = $resolvedGroups;
+        }
+
         if ($timestamp !== null) {
             $body['timestamp'] = Dates::format($timestamp);
         }
 
         return $body;
+    }
+
+    /**
+     * Builds the `groups` list of a track body, refusing malformed entries before any request.
+     *
+     * Each group needs an `id`. Its `type` defaults to "organization", and Dregs normalizes it
+     * to lower_snake_case, so only one group of each type may go with an event.
+     *
+     * @param array<mixed>|null $groups
+     *
+     * @throws InvalidArgumentException
+     *
+     * @return list<array{type: string, id: string, data: object}>
+     */
+    private static function groupsBody(?array $groups): array
+    {
+        if ($groups === null) {
+            return [];
+        }
+
+        if (!array_is_list($groups)) {
+            throw new InvalidArgumentException(
+                "groups is a list of groups, such as [['type' => 'team', 'id' => 'team_42']]."
+            );
+        }
+
+        $resolved = [];
+        $seen = [];
+
+        foreach ($groups as $group) {
+            if (!is_array($group)) {
+                throw new InvalidArgumentException(
+                    'Each group must be an array with an id, and optionally a type and data.'
+                );
+            }
+
+            $groupId = $group['id'] ?? null;
+
+            if ((!is_string($groupId) && !is_int($groupId)) || $groupId === '') {
+                throw new InvalidArgumentException('Each group needs an id, as a string or an integer.');
+            }
+
+            $groupType = $group['type'] ?? null;
+
+            if ($groupType === null || $groupType === '') {
+                $groupType = self::DEFAULT_GROUP_TYPE;
+            }
+
+            if (!is_string($groupType)) {
+                throw new InvalidArgumentException(
+                    "A group's type must be a string, such as 'organization' or 'team'."
+                );
+            }
+
+            $typeKey = strtolower($groupType);
+
+            if (isset($seen[$typeKey])) {
+                throw new InvalidArgumentException(
+                    "Only one group of each type can go with an event; '{$groupType}' appears twice."
+                );
+            }
+
+            $data = $group['data'] ?? null;
+
+            if ($data !== null && !is_array($data)) {
+                throw new InvalidArgumentException(
+                    "A group's data must be an array, such as ['name' => 'Payments']."
+                );
+            }
+
+            $seen[$typeKey] = true;
+            $resolved[] = [
+                'type' => $groupType,
+                'id' => (string) $groupId,
+                'data' => (object) ($data ?? []),
+            ];
+        }
+
+        return $resolved;
     }
 
     /**
@@ -535,7 +708,9 @@ class Client
      */
     private static function apiException(Response $response, mixed $payload): ApiException
     {
-        $description = self::describe($payload) ?? 'Request failed';
+        $description = self::describe($payload)
+            ?? self::REASON_PHRASES[$response->statusCode]
+            ?? 'Request failed';
         $requestId = $response->header('X-Request-Id');
         $status = $response->statusCode;
 
@@ -594,6 +769,29 @@ class Client
     }
 
     /**
+     * Builds the query string for a request, or nothing when there are no parameters.
+     *
+     * @param array<string, string|int|bool> $query
+     */
+    private static function queryString(array $query): string
+    {
+        if ($query === []) {
+            return '';
+        }
+
+        $spelled = [];
+
+        foreach ($query as $name => $value) {
+            $spelled[$name] = is_bool($value) ? ($value ? 'true' : 'false') : (string) $value;
+        }
+
+        return '?' . http_build_query($spelled, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    /**
+     * Every body the API takes is a JSON object, so an empty one goes out as `{}` rather than
+     * the `[]` json_encode would make of an empty array.
+     *
      * @param array<string, mixed> $body
      *
      * @throws InvalidArgumentException The body holds something JSON cannot represent.
@@ -601,11 +799,14 @@ class Client
     private static function encode(array $body): string
     {
         try {
-            return json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            return json_encode(
+                $body === [] ? new stdClass() : $body,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+            );
         } catch (JsonException $exception) {
             throw new InvalidArgumentException(
-                'The event could not be encoded as JSON: ' . $exception->getMessage()
-                . '. Event and identity data must hold only values json_encode understands, '
+                'The request could not be encoded as JSON: ' . $exception->getMessage()
+                . '. Event, identity, and group data must hold only values json_encode understands, '
                 . 'which rules out resources and objects without a JsonSerializable.',
                 0,
                 $exception

@@ -53,6 +53,26 @@ signature, so the identity is the only thing tying the event to a user.
 heavily, so send them whenever you have them. Name the keys the way your application already does and
 map them to Dregs's canonical fields under **Settings → Mappings**; the same goes for event names.
 
+### Groups
+
+If your application groups users into organizations, teams, workspaces, or the like, pass the groups the
+user is acting in. Dregs records each group and makes the identity a member of it. Each group has your
+own `id`, a `type` that is your own name for the kind of group (`'organization'` when omitted), and
+optional `data` that Dregs merges into the group, so later events can send the type and id alone. Dregs
+normalizes types to lower_snake_case, so `ParentCompany` and `parent-company` are the same type, and an
+event can carry one group of each type.
+
+```php
+$client->track(
+    'user.login',
+    identity: 'user_12345',
+    groups: [
+        ['type' => 'organization', 'id' => 'org_678', 'data' => ['name' => 'Acme Inc', 'plan' => 'enterprise']],
+        ['type' => 'team', 'id' => 'team_42', 'data' => ['name' => 'Payments']],
+    ],
+);
+```
+
 ### Idempotency
 
 Every event is sent with an `id`, which makes ingestion idempotent: reposting the same id returns the
@@ -138,6 +158,100 @@ $client->identities->analyze('user_12345');
 This queues the work and returns; it does not wait for the cycle to finish. Dregs rescores on its own
 as events arrive, so you rarely need this outside of a support or backfill flow.
 
+### History, links, and past cycles
+
+```php
+foreach ($client->identities->history('user_12345', limit: 10) as $entry) {
+    echo $entry->finishedAt?->format('c'), ' ', $entry->humanity, ' ', $entry->behavior, PHP_EOL;
+}
+
+$older = $client->identities->analysis('user_12345', $entry->cycleId);  // a past cycle's observations
+
+foreach ($client->identities->links('user_12345') as $link) {
+    echo $link->identityId, ' ', $link->type, ' ', $link->explanation, PHP_EOL;  // e.g. "user_999", "SAME_DEVICE"
+}
+```
+
+### Disregarding an identity
+
+Leave your own staff and test accounts out of scoring and escalations:
+
+```php
+$client->identities->update('qa_bot_7', disregarded: true);
+```
+
+### Asking for a review
+
+When a score looks wrong, Dregs's AI reviewer will look over the analysis and say why. The review runs
+in the background, so read it back later with `reviews()`.
+
+```php
+$review = $client->identities->review('user_12345', feedback: 'This is a long-standing customer.');
+
+$review->status;  // "PENDING", then "FINISHED"
+```
+
+## Listing and paging
+
+Every namespace with a `list()` returns one `Dregs\Model\Page` at a time, numbered from 0, and a
+`listAll()` that walks every page for you as a `Generator`:
+
+```php
+$page = $client->identities->list(term: 'example.com', pageSize: 50);
+
+$page->totalElements;  // how many match in all
+$page->hasNext();      // whether another page follows
+
+foreach ($client->identities->listAll(group: 'org_678', sort: 'humanityScore', order: 'asc') as $identity) {
+    // ...
+}
+```
+
+A `Page` is countable and iterable over the items on it, and `all()` hands them back as a plain list.
+Filters you leave out are not sent. A page holds at most 100 items. `listAll()` checks its arguments
+when you call it but makes no request until you start iterating.
+
+## Groups
+
+`track()` records groups and memberships as events arrive. The `groups` namespace reads them back, and
+keeps Dregs in step when something changes outside an event, such as a user leaving a team:
+
+```php
+$client->groups->create('org_678', attributes: ['name' => 'Acme Inc', 'plan' => 'enterprise']);
+
+$group = $client->groups->get('organization', 'org_678');
+$group->identityCount;  // 12
+
+$client->groups->update('organization', 'org_678', ['plan' => 'business']);
+
+$client->groups->addMember('team', 'team_42', 'user_12345');
+$client->groups->removeMember('team', 'team_42', 'user_12345');
+
+foreach ($client->groups->listAll(groupType: 'team', identity: 'user_12345') as $team) {
+    echo $team->id, ' ', $team->displayName, PHP_EOL;
+}
+```
+
+`create()` merges into the group when one with the same type and id already exists, so it is safe to call
+on every sync. The type defaults to `'organization'`.
+
+## Events, devices, and escalations
+
+```php
+foreach ($client->events->listAll(identity: 'user_12345') as $event) {
+    echo $event->timestamp?->format('c'), ' ', $event->name, ' ', $event->canonicalType, PHP_EOL;
+}
+
+$client->devices->update('a1b2c3d4e5', disregarded: true);  // e.g. a shared office machine
+
+foreach ($client->escalations->listAll(status: 'open', severity: 'critical') as $escalation) {
+    notifyOnCall($escalation->identity?->id);
+    $client->escalations->update($escalation->id, status: 'acknowledged');
+}
+
+$summary = $client->escalations->summary();  // $summary->open, ->acknowledged, ->closed
+```
+
 ## Errors
 
 PHP's convention is `Exception`, not `Error`, so that is the suffix here: `QuotaExceededException`
@@ -166,7 +280,7 @@ try {
 | `AuthenticationException` | 401, the secret key was not recognized |
 | `QuotaExceededException` | 402, the account is over its monthly event limit |
 | `PermissionDeniedException` | 403, the credential may not do this |
-| `NotFoundException` | 404, no such identity, or it has not been analyzed |
+| `NotFoundException` | 404, no such identity, group, event, device, or escalation, or no analysis yet |
 | `RateLimitException` | 429, too many requests |
 | `ServerException` | 5xx |
 | `TimeoutException` | the request timed out |
@@ -177,9 +291,10 @@ All of them live under `Dregs\Exception\`. Those that reached the API extend `Ap
 `statusCode`, `body`, and `requestId`; `getMessage()` reads `HTTP 404: Not Found (request req_abc)`,
 and the bare message Dregs sent is on `description`.
 
-Bad arguments are the exception to the rule. An empty identity, a reserved event id, or a `pk_` public
-key throws PHP's own `InvalidArgumentException`, because those are programming mistakes to fix rather
-than runtime conditions to handle.
+Bad arguments are the exception to the rule. An empty identity, a reserved event id, a negative page,
+an unknown escalation status, or a `pk_` public key throws PHP's own `InvalidArgumentException`, before
+any request is made, because those are programming mistakes to fix rather than runtime conditions to
+handle.
 
 ### Retries
 

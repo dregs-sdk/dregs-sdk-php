@@ -77,12 +77,52 @@ final readonly class RecordedRequest
     }
 
     /**
-     * The request's path, with the base URL stripped off.
+     * The request's path, with the base URL and any query string stripped off.
      */
     public function pathAfter(string $baseUrl): string
     {
-        return str_starts_with($this->url, $baseUrl)
+        $path = str_starts_with($this->url, $baseUrl)
             ? substr($this->url, strlen($baseUrl))
             : $this->url;
+
+        $mark = strpos($path, '?');
+
+        return $mark === false ? $path : substr($path, 0, $mark);
+    }
+
+    /**
+     * The query parameters, decoded, or an empty array when there were none.
+     *
+     * @return array<string, string>
+     */
+    public function query(): array
+    {
+        $raw = parse_url($this->url, PHP_URL_QUERY);
+
+        if (!is_string($raw) || $raw === '') {
+            return [];
+        }
+
+        parse_str($raw, $decoded);
+
+        $parameters = [];
+
+        foreach ($decoded as $name => $value) {
+            if (is_string($value)) {
+                $parameters[(string) $name] = $value;
+            }
+        }
+
+        return $parameters;
+    }
+
+    /**
+     * The raw query string, exactly as sent, or an empty string when there was none.
+     */
+    public function rawQuery(): string
+    {
+        $raw = parse_url($this->url, PHP_URL_QUERY);
+
+        return is_string($raw) ? $raw : '';
     }
 }
